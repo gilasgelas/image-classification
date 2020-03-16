@@ -1,108 +1,82 @@
+import os
 import numpy
 import matplotlib.pyplot as plt
-from keras.layers import Dropout
-from keras.layers import Flatten
+import pickle
+import keras
 from keras.constraints import maxnorm
 from keras.optimizers import SGD
+from keras.layers import Dropout
+from keras.layers import Flatten
 from keras.layers import Conv2D
+from keras.layers import Dense
 from keras.layers.convolutional import MaxPooling2D
+from keras.models import Sequential
 from keras.utils import np_utils
 from keras import backend as K
-import load_data
-from keras.models import Sequential
-from keras.layers import Dense
 from sklearn.model_selection import train_test_split
+import PIL
 
-K.set_image_dim_ordering('tf')
-# fix random seed for reproducibility
+K.common.set_image_dim_ordering('tf')
 seed = 7
 numpy.random.seed(seed)
 
-def pre_process(X):
+# Prepare training data
+dataset_dir="dataset"
+label = os.listdir(dataset_dir)
+save_label = open("labels.txt","wb")
+pickle.dump(label, save_label)
+save_label.close()
+dataset=[]
+for image_label in label:
+    images = os.listdir(dataset_dir+"/"+image_label)
+    for image in images:
+        img = PIL.Image.open(dataset_dir+"/"+image_label+"/"+image)
+        img = img.resize((64, 64))
+        dataset.append((numpy.asarray(img),image_label))
 
-    # normalize inputs from 0-255 to 0.0-1.0
-    X=X.astype('float32')
-    X = X / 255.0
-    return X
+# Multidimensional array
+x=[]
+y=[]
+for  input,image_label in dataset:
+    x.append(input)
+    y.append(label.index(image_label))
+x=numpy.array(x)
+y=numpy.array(y)
+x_train,y_train=x,y
+data_set=(x_train,y_train)
+x_train = x_train / 255.0
+y_binary = np_utils.to_categorical(y_train)
 
-def one_hot_encode(y):
+# Create model
+model = Sequential()
+model.add(Conv2D(32, (3, 3), input_shape=(64, 64, 3), padding='same', activation='relu', kernel_constraint=maxnorm(3)))
+model.add(Dropout(0.2))
+model.add(Conv2D(32, (3, 3), activation='relu', padding='same', kernel_constraint=maxnorm(3)))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Flatten())
+model.add(Dense(512, activation='relu', kernel_constraint=maxnorm(3)))
+model.add(Dropout(0.5))
+model.add(Dense(y_binary.shape[1], activation='softmax'))
 
-    # one hot encode outputs
-    y = np_utils.to_categorical(y)
-    num_classes = y.shape[1]
-    return y,num_classes
-
-def define_model(num_classes,epochs):
-    # Create the model
-    model = Sequential()
-    model.add(Conv2D(32, (3, 3), input_shape=(64, 64, 3), padding='same', activation='relu', kernel_constraint=maxnorm(3)))
-    model.add(Dropout(0.2))
-    model.add(Conv2D(32, (3, 3), activation='relu', padding='same', kernel_constraint=maxnorm(3)))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    model.add(Flatten())
-    model.add(Dense(512, activation='relu', kernel_constraint=maxnorm(3)))
-    model.add(Dropout(0.5))
-    model.add(Dense(num_classes, activation='softmax'))
-    # Compile model
-    lrate = 0.01
-    decay = lrate/epochs
-    sgd = SGD(lr=lrate, momentum=0.9, decay=decay, nesterov=False)
-    model.compile(loss='categorical_crossentropy', optimizer=sgd, metrics=['accuracy'])
-    print(model.summary())
-    return model
-
-
-# load data
-X,y=load_data.load_datasets()
-
-# pre process
-X=pre_process(X)
-
-#one hot encode
-y,num_classes=one_hot_encode(y)
-
-
-#split dataset
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=7)
-
+# Compile
 epochs = 10
-#define model
-model=define_model(num_classes,epochs)
+lrate = 0.01
+decay = lrate/epochs
+sgd = SGD(lr=lrate, momentum=0.9, decay=decay, nesterov=False)
+model.compile(loss='sparse_categorical_crossentropy', optimizer=sgd, metrics=['accuracy'])
+callbacks=[keras.callbacks.TensorBoard(log_dir='./logs', histogram_freq=0, batch_size=32, write_graph=True, write_grads=False, write_images=True, embeddings_freq=0, embeddings_layer_names=None, embeddings_metadata=None)]
 
+# Fit
+model.fit(x_train, y_train, epochs=epochs, batch_size=32,shuffle=True,callbacks=callbacks)
 
-# Fit the model
-history=model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=epochs, batch_size=32)
+# Evaluation
+scores = model.evaluate(x_train, y_train, verbose=0)
 
-# list all data in history
-print(history.history.keys())
-# summarize history for accuracy
-plt.plot(history.history['acc'])
-plt.plot(history.history['val_acc'])
-plt.title('model accuracy')
-plt.ylabel('accuracy')
-plt.xlabel('epoch')
-plt.legend(['train', 'test'], loc='upper left')
-plt.show()
-# summarize history for loss
-plt.plot(history.history['loss'])
-plt.plot(history.history['val_loss'])
-plt.title('model loss')
-plt.ylabel('loss')
-plt.xlabel('epoch')
-plt.legend(['train', 'test'], loc='upper left')
-plt.show()
-
-
-
-
-# Final evaluation of the model
-scores = model.evaluate(X_test, y_test, verbose=0)
-print("Accuracy: %.2f%%" % (scores[1]*100))
-
-# serialize model to JSONx
+# Save model
+model.save_weights("model.h5")
 model_json = model.to_json()
-with open("model_face.json", "w") as json_file:
+with open("model.json", "w") as json_file:
     json_file.write(model_json)
-# serialize weights to HDF5
-model.save_weights("model_face.h5")
-print("Saved model to disk")
+
+print(model.summary())
+print("Done.")
